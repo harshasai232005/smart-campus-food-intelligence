@@ -2,53 +2,45 @@ import os
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import URL
 
 
-load_dotenv()
+# Load .env and allow it to override old environment variables
+load_dotenv(override=True)
 
 
 def get_engine():
+    """
+    Create a SQLAlchemy MySQL engine.
 
-    host = os.getenv(
-        "DB_HOST",
-        "localhost"
-    )
+    For external Railway connections, use MYSQL_PUBLIC_URL.
+    """
 
-    port = int(
-        os.getenv(
-            "DB_PORT",
-            "3306"
-        )
-    )
-
-    database = os.getenv(
-        "DB_NAME",
-        "campus_food_intelligence"
-    )
-
-    username = os.getenv(
-        "DB_USER",
-        "root"
-    )
-
-    password = os.getenv(
-        "DB_PASSWORD",
+    public_url = os.getenv(
+        "MYSQL_PUBLIC_URL",
         ""
-    )
+    ).strip()
 
-    connection_url = URL.create(
-        drivername="mysql+pymysql",
-        username=username,
-        password=password,
-        host=host,
-        port=port,
-        database=database
-    )
+    if public_url:
 
-    return create_engine(
-        connection_url,
-        pool_pre_ping=True
+        # Railway provides mysql://...
+        # SQLAlchemy + PyMySQL uses mysql+pymysql://...
+        if public_url.startswith("mysql://"):
+            public_url = public_url.replace(
+                "mysql://",
+                "mysql+pymysql://",
+                1
+            )
+
+        return create_engine(
+            public_url,
+            pool_pre_ping=True,
+            connect_args={
+                "connect_timeout": 15
+            }
+        )
+
+    raise RuntimeError(
+        "MYSQL_PUBLIC_URL is not set in .env"
     )
 
 
@@ -62,9 +54,7 @@ def test_connection():
             text("SELECT 1")
         )
 
-        value = result.scalar()
-
         print(
             "Database test result:",
-            value
+            result.scalar()
         )
