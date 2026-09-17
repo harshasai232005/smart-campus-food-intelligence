@@ -8,3 +8,6 @@ sqlalchemy
 pymysql
 python-dotenv
 joblib
+streamlit
+httpx
+plotly

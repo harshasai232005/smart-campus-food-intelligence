@@ -1,6 +1,6 @@
 from pathlib import Path
 import os
-import sys
+import json
 from datetime import date, timedelta
 
 import httpx
@@ -11,21 +11,23 @@ import streamlit as st
 from dotenv import load_dotenv
 
 
-# ---------------------------------------------------------
+# =========================================================
 # PATH
-# ---------------------------------------------------------
+# =========================================================
 
 ROOT = Path(__file__).resolve().parents[1]
 
-if str(ROOT) not in sys.path:
-    sys.path.append(str(ROOT))
 
-
-from src.predictor import make_prediction
-
+# =========================================================
+# ENVIRONMENT
+# =========================================================
 
 load_dotenv()
 
+
+# =========================================================
+# DATA FILES
+# =========================================================
 
 DATA_FILE = (
     ROOT
@@ -59,9 +61,9 @@ SHAP_FILE = (
 )
 
 
-# ---------------------------------------------------------
-# PAGE
-# ---------------------------------------------------------
+# =========================================================
+# PAGE CONFIGURATION
+# =========================================================
 
 st.set_page_config(
     page_title="Smart Campus Food Intelligence",
@@ -70,9 +72,9 @@ st.set_page_config(
 )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # LOAD DATA
-# ---------------------------------------------------------
+# =========================================================
 
 @st.cache_data
 def load_data():
@@ -91,9 +93,9 @@ def load_data():
 df = load_data()
 
 
-# ---------------------------------------------------------
+# =========================================================
 # API URL
-# ---------------------------------------------------------
+# =========================================================
 
 def get_api_url():
 
@@ -107,16 +109,16 @@ def get_api_url():
 
         return os.getenv(
             "API_URL",
-            "http://127.0.0.1:8000"
+            "https://smart-campus-food-api.vercel.app"
         )
 
 
-API_URL = get_api_url()
+API_URL = get_api_url().rstrip("/")
 
 
-# ---------------------------------------------------------
+# =========================================================
 # TITLE
-# ---------------------------------------------------------
+# =========================================================
 
 st.title(
     "🍽️ Smart Campus Food Demand & Waste Intelligence"
@@ -128,9 +130,9 @@ st.caption(
 )
 
 
-# ---------------------------------------------------------
+# =========================================================
 # SIDEBAR
-# ---------------------------------------------------------
+# =========================================================
 
 page = st.sidebar.selectbox(
     "Select Page",
@@ -172,11 +174,18 @@ if page == "Executive Overview":
         .sum()
     )
 
-    waste_rate = (
-        total_waste
-        / total_prepared
-        * 100
-    )
+    if total_prepared > 0:
+
+        waste_rate = (
+            total_waste
+            / total_prepared
+            * 100
+        )
+
+    else:
+
+        waste_rate = 0
+
 
     average_daily_demand = (
         df.groupby("date")
@@ -185,22 +194,27 @@ if page == "Executive Overview":
         .mean()
     )
 
+
     col1, col2, col3, col4 = st.columns(4)
+
 
     col1.metric(
         "Meal Records",
         f"{total_records:,}"
     )
 
+
     col2.metric(
         "Average Daily Demand",
         f"{average_daily_demand:,.0f}"
     )
 
+
     col3.metric(
         "Total Waste",
         f"{total_waste:,.0f} kg"
     )
+
 
     col4.metric(
         "Waste Rate",
@@ -212,6 +226,7 @@ if page == "Executive Overview":
         "Daily Meal Demand"
     )
 
+
     daily_demand = (
         df.groupby("date")
         ["students_present"]
@@ -219,12 +234,14 @@ if page == "Executive Overview":
         .reset_index()
     )
 
+
     fig = px.line(
         daily_demand,
         x="date",
         y="students_present",
         title="Daily Campus Meal Demand"
     )
+
 
     st.plotly_chart(
         fig,
@@ -242,15 +259,24 @@ elif page == "Demand Forecast":
         "🔮 Demand Forecast"
     )
 
+
     col1, col2 = st.columns(2)
+
+
+    # -----------------------------------------------------
+    # INPUT SECTION
+    # -----------------------------------------------------
 
     with col1:
 
         selected_date = st.date_input(
             "Meal Date",
-            value=date.today()
-            + timedelta(days=1)
+            value=(
+                date.today()
+                + timedelta(days=1)
+            )
         )
+
 
         mess_name = st.selectbox(
             "Mess",
@@ -261,6 +287,7 @@ elif page == "Demand Forecast":
             )
         )
 
+
         meal_type = st.selectbox(
             "Meal Type",
             [
@@ -269,6 +296,7 @@ elif page == "Demand Forecast":
                 "Dinner"
             ]
         )
+
 
         menu_options = sorted(
             df[
@@ -279,11 +307,16 @@ elif page == "Demand Forecast":
             .tolist()
         )
 
+
         menu_name = st.selectbox(
             "Menu",
             menu_options
         )
 
+
+    # -----------------------------------------------------
+    # ENVIRONMENT SECTION
+    # -----------------------------------------------------
 
     with col2:
 
@@ -294,16 +327,19 @@ elif page == "Demand Forecast":
             value=85.0
         )
 
+
         temperature = st.number_input(
             "Temperature (°C)",
             value=28.0
         )
+
 
         rainfall = st.number_input(
             "Rainfall (mm)",
             min_value=0.0,
             value=2.0
         )
+
 
         humidity = st.number_input(
             "Humidity (%)",
@@ -312,17 +348,21 @@ elif page == "Demand Forecast":
             value=70.0
         )
 
+
         exam_day = st.checkbox(
             "Exam Day"
         )
+
 
         holiday = st.checkbox(
             "Holiday"
         )
 
+
         special_event = st.checkbox(
             "Special Event"
         )
+
 
         students_expected = st.number_input(
             "Expected Students",
@@ -331,12 +371,22 @@ elif page == "Demand Forecast":
         )
 
 
+    # -----------------------------------------------------
+    # PREDICTION BUTTON
+    # -----------------------------------------------------
+
     if st.button(
         "🚀 Predict Demand",
         type="primary"
     ):
 
+
+        # -------------------------------------------------
+        # CREATE API PAYLOAD
+        # -------------------------------------------------
+
         payload = {
+
             "meal_date":
                 str(selected_date),
 
@@ -371,15 +421,12 @@ elif page == "Demand Forecast":
                 int(special_event),
 
             "students_expected":
-                students_expected
+                int(students_expected)
         }
 
 
-        result = None
-
-
         # -------------------------------------------------
-        # TRY API FIRST
+        # CALL DEPLOYED FASTAPI
         # -------------------------------------------------
 
         try:
@@ -387,53 +434,93 @@ elif page == "Demand Forecast":
             response = httpx.post(
                 f"{API_URL}/predict",
                 json=payload,
-                timeout=20
+                timeout=30
             )
+
 
             response.raise_for_status()
 
+
             result = response.json()
 
+
             st.success(
-                "Prediction generated through FastAPI."
+                "Prediction generated successfully through the deployed FastAPI."
             )
 
-        except Exception:
 
-            # -------------------------------------------------
-            # LOCAL FALLBACK
-            # -------------------------------------------------
+        except httpx.HTTPStatusError as error:
 
-            result = make_prediction(
-                payload
+            st.error(
+                "The prediction API returned an error."
             )
 
-            st.info(
-                "FastAPI was unavailable, so "
-                "the local prediction engine was used."
+            st.code(
+                f"HTTP Status: "
+                f"{error.response.status_code}\n\n"
+                f"Response:\n"
+                f"{error.response.text}"
             )
 
+            st.stop()
+
+
+        except httpx.RequestError as error:
+
+            st.error(
+                "Unable to connect to the deployed prediction API."
+            )
+
+            st.code(
+                str(error)
+            )
+
+            st.stop()
+
+
+        except Exception as error:
+
+            st.error(
+                "An unexpected error occurred while "
+                "calling the prediction API."
+            )
+
+            st.code(
+                str(error)
+            )
+
+            st.stop()
+
+
+        # -------------------------------------------------
+        # DISPLAY PREDICTION
+        # -------------------------------------------------
 
         st.subheader(
             "Prediction Result"
         )
 
+
         col1, col2, col3, col4 = st.columns(4)
+
 
         col1.metric(
             "Predicted Demand",
             f"{result['predicted_demand']:.0f}"
         )
 
+
         col2.metric(
             "Recommended Preparation",
             f"{result['recommended_preparation']}"
         )
 
+
         col3.metric(
             "Predicted Waste",
             f"{result['predicted_waste_kg']:.1f} kg"
         )
+
 
         col4.metric(
             "Waste Rate",
@@ -441,27 +528,77 @@ elif page == "Demand Forecast":
         )
 
 
+        # -------------------------------------------------
+        # RISK
+        # -------------------------------------------------
+
         st.subheader(
             "Risk"
         )
+
 
         st.write(
             result["risk_level"]
         )
 
 
+        # -------------------------------------------------
+        # RECOMMENDATION
+        # -------------------------------------------------
+
         st.subheader(
             "Recommendation"
         )
+
 
         st.info(
             result["recommendation"]
         )
 
+
+        # -------------------------------------------------
+        # WASTE COST
+        # -------------------------------------------------
+
         st.write(
             "Estimated Waste Cost:",
             f"₹{result['estimated_waste_cost']:,.2f}"
         )
+
+
+        # -------------------------------------------------
+        # DATABASE STATUS
+        # -------------------------------------------------
+
+        st.subheader(
+            "Database Status"
+        )
+
+
+        if result.get(
+            "database_saved",
+            False
+        ):
+
+            st.success(
+                "Prediction successfully saved to Railway MySQL."
+            )
+
+        else:
+
+            st.warning(
+                "Prediction generated, but it was not saved "
+                "to the database."
+            )
+
+
+        if result.get(
+            "database_error"
+        ):
+
+            st.error(
+                result["database_error"]
+            )
 
 
 # =========================================================
@@ -474,7 +611,13 @@ elif page == "Waste Analytics":
         "♻️ Waste Analytics"
     )
 
+
     col1, col2 = st.columns(2)
+
+
+    # -----------------------------------------------------
+    # WASTE BY MEAL
+    # -----------------------------------------------------
 
     with col1:
 
@@ -485,6 +628,7 @@ elif page == "Waste Analytics":
             .reset_index()
         )
 
+
         fig1 = px.bar(
             waste_by_meal,
             x="meal_type",
@@ -492,11 +636,16 @@ elif page == "Waste Analytics":
             title="Average Waste by Meal"
         )
 
+
         st.plotly_chart(
             fig1,
             use_container_width=True
         )
 
+
+    # -----------------------------------------------------
+    # WASTE BY MENU
+    # -----------------------------------------------------
 
     with col2:
 
@@ -511,6 +660,7 @@ elif page == "Waste Analytics":
             )
         )
 
+
         fig2 = px.bar(
             waste_by_menu,
             x="menu_name",
@@ -518,11 +668,16 @@ elif page == "Waste Analytics":
             title="Average Waste by Menu"
         )
 
+
         st.plotly_chart(
             fig2,
             use_container_width=True
         )
 
+
+    # -----------------------------------------------------
+    # DAILY WASTE
+    # -----------------------------------------------------
 
     daily_waste = (
         df.groupby("date")
@@ -531,12 +686,14 @@ elif page == "Waste Analytics":
         .reset_index()
     )
 
+
     fig3 = px.line(
         daily_waste,
         x="date",
         y="food_wasted_kg",
         title="Daily Food Waste"
     )
+
 
     st.plotly_chart(
         fig3,
@@ -545,7 +702,7 @@ elif page == "Waste Analytics":
 
 
 # =========================================================
-# ANOMALIES
+# ANOMALY DETECTION
 # =========================================================
 
 elif page == "Anomaly Detection":
@@ -554,22 +711,27 @@ elif page == "Anomaly Detection":
         "🚨 Anomaly Detection"
     )
 
+
     anomaly_df = pd.read_csv(
         ANOMALY_FILE
     )
+
 
     anomaly_df["date"] = pd.to_datetime(
         anomaly_df["date"]
     )
 
+
     anomalies = anomaly_df[
         anomaly_df["anomaly"] == -1
     ]
+
 
     st.metric(
         "Detected Anomalies",
         len(anomalies)
     )
+
 
     st.dataframe(
         anomalies[
@@ -591,7 +753,7 @@ elif page == "Anomaly Detection":
 
 
 # =========================================================
-# SEGMENTATION
+# MEAL SEGMENTATION
 # =========================================================
 
 elif page == "Meal Segmentation":
@@ -600,14 +762,17 @@ elif page == "Meal Segmentation":
         "📊 Meal/Mess Segmentation"
     )
 
+
     segment_df = pd.read_csv(
         SEGMENT_FILE
     )
+
 
     st.dataframe(
         segment_df,
         use_container_width=True
     )
+
 
     fig = px.scatter(
         segment_df,
@@ -621,6 +786,7 @@ elif page == "Meal Segmentation":
         ],
         title="Meal/Mess Segments"
     )
+
 
     st.plotly_chart(
         fig,
@@ -638,7 +804,10 @@ elif page == "Model Performance":
         "🤖 Model Performance"
     )
 
-    import json
+
+    # -----------------------------------------------------
+    # LOAD METRICS
+    # -----------------------------------------------------
 
     with open(
         METRICS_FILE,
@@ -646,18 +815,31 @@ elif page == "Model Performance":
         encoding="utf-8"
     ) as file:
 
-        metrics = json.load(file)
+        metrics = json.load(
+            file
+        )
 
+
+    # -----------------------------------------------------
+    # BEST MODEL
+    # -----------------------------------------------------
 
     st.subheader(
         "Best Demand Model"
     )
 
+
     st.write(
         metrics["best_model"]
     )
 
+
+    # -----------------------------------------------------
+    # MODEL METRICS TABLE
+    # -----------------------------------------------------
+
     rows = []
+
 
     for name, values in (
         metrics["models"].items()
@@ -665,17 +847,28 @@ elif page == "Model Performance":
 
         rows.append(
             {
-                "Model": name,
-                "MAE": values["MAE"],
-                "RMSE": values["RMSE"],
-                "MAPE": values["MAPE"],
-                "R²": values["R2"]
+                "Model":
+                    name,
+
+                "MAE":
+                    values["MAE"],
+
+                "RMSE":
+                    values["RMSE"],
+
+                "MAPE":
+                    values["MAPE"],
+
+                "R²":
+                    values["R2"]
             }
         )
+
 
     metrics_df = pd.DataFrame(
         rows
     )
+
 
     st.dataframe(
         metrics_df,
@@ -683,11 +876,16 @@ elif page == "Model Performance":
     )
 
 
+    # -----------------------------------------------------
+    # SHAP
+    # -----------------------------------------------------
+
     if SHAP_FILE.exists():
 
         st.subheader(
             "SHAP Explainability"
         )
+
 
         st.image(
             str(SHAP_FILE),
