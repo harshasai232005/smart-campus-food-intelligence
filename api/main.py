@@ -1,6 +1,7 @@
 from datetime import date
+import traceback
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -9,6 +10,10 @@ from src.predictor import (
     save_prediction_to_db
 )
 
+
+# =========================================================
+# FASTAPI APPLICATION
+# =========================================================
 
 app = FastAPI(
     title="Smart Campus Food Intelligence API",
@@ -20,6 +25,10 @@ app = FastAPI(
 )
 
 
+# =========================================================
+# CORS
+# =========================================================
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,6 +37,10 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
+
+# =========================================================
+# REQUEST MODEL
+# =========================================================
 
 class PredictionInput(BaseModel):
 
@@ -75,16 +88,25 @@ class PredictionInput(BaseModel):
     )
 
 
+# =========================================================
+# HOME
+# =========================================================
+
 @app.get("/")
 def home():
 
     return {
         "message":
             "Smart Campus Food Intelligence API",
+
         "status":
             "running"
     }
 
+
+# =========================================================
+# HEALTH CHECK
+# =========================================================
 
 @app.get("/health")
 def health():
@@ -94,18 +116,58 @@ def health():
     }
 
 
+# =========================================================
+# SINGLE PREDICTION
+# =========================================================
+
 @app.post("/predict")
 def predict(
     payload: PredictionInput
 ):
 
+    # -----------------------------------------------------
+    # Convert Pydantic model to dictionary
+    # -----------------------------------------------------
+
     payload_dict = (
         payload.model_dump()
     )
 
-    result = make_prediction(
-        payload_dict
-    )
+
+    # -----------------------------------------------------
+    # RUN MACHINE LEARNING PREDICTION
+    # -----------------------------------------------------
+
+    try:
+
+        result = make_prediction(
+            payload_dict
+        )
+
+    except Exception as error:
+
+        # Print the actual error into Vercel runtime logs
+        print(
+            "PREDICTION_ERROR:",
+            repr(error),
+            flush=True
+        )
+
+        # Print complete traceback
+        traceback.print_exc()
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Prediction failed on the server. "
+                "Check Vercel runtime logs."
+            )
+        ) from error
+
+
+    # -----------------------------------------------------
+    # SAVE RESULT TO DATABASE
+    # -----------------------------------------------------
 
     database_saved = False
 
@@ -121,7 +183,22 @@ def predict(
 
     except Exception as error:
 
-        database_error = str(error)
+        database_error = str(
+            error
+        )
+
+        print(
+            "DATABASE_SAVE_ERROR:",
+            repr(error),
+            flush=True
+        )
+
+        traceback.print_exc()
+
+
+    # -----------------------------------------------------
+    # ADD DATABASE STATUS TO RESPONSE
+    # -----------------------------------------------------
 
     result[
         "database_saved"
@@ -131,8 +208,17 @@ def predict(
         "database_error"
     ] = database_error
 
+
+    # -----------------------------------------------------
+    # RETURN RESULT
+    # -----------------------------------------------------
+
     return result
 
+
+# =========================================================
+# BATCH PREDICTION
+# =========================================================
 
 @app.post("/batch-predict")
 def batch_predict(
@@ -141,15 +227,50 @@ def batch_predict(
 
     results = []
 
+
     for payload in payloads:
+
+        # -------------------------------------------------
+        # Convert payload
+        # -------------------------------------------------
 
         payload_dict = (
             payload.model_dump()
         )
 
-        result = make_prediction(
-            payload_dict
-        )
+
+        # -------------------------------------------------
+        # Run prediction
+        # -------------------------------------------------
+
+        try:
+
+            result = make_prediction(
+                payload_dict
+            )
+
+        except Exception as error:
+
+            print(
+                "BATCH_PREDICTION_ERROR:",
+                repr(error),
+                flush=True
+            )
+
+            traceback.print_exc()
+
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Batch prediction failed. "
+                    "Check Vercel runtime logs."
+                )
+            ) from error
+
+
+        # -------------------------------------------------
+        # Save prediction
+        # -------------------------------------------------
 
         try:
 
@@ -161,6 +282,10 @@ def batch_predict(
                 "database_saved"
             ] = True
 
+            result[
+                "database_error"
+            ] = None
+
         except Exception as error:
 
             result[
@@ -169,9 +294,31 @@ def batch_predict(
 
             result[
                 "database_error"
-            ] = str(error)
+            ] = str(
+                error
+            )
 
-        results.append(result)
+            print(
+                "BATCH_DATABASE_SAVE_ERROR:",
+                repr(error),
+                flush=True
+            )
+
+            traceback.print_exc()
+
+
+        # -------------------------------------------------
+        # Add result
+        # -------------------------------------------------
+
+        results.append(
+            result
+        )
+
+
+    # -----------------------------------------------------
+    # Return all results
+    # -----------------------------------------------------
 
     return {
         "count": len(results),
